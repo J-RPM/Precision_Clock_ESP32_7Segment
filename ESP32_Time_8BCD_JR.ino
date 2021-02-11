@@ -16,7 +16,7 @@
                               Modified by: J_RPM
                                http://j-rpm.com/
                         https://www.youtube.com/c/JRPM
-                              January of 2021
+                              January of 2021 
 
               An optional OLED display is added to show the Time an Date,
                   adding some new routines and modifying others.
@@ -38,7 +38,7 @@
 
  ____________________________________________________________________________________
 */
-String HWversion = "v1.42"; 
+String HWversion = "v1.43"; 
 #include <WiFi.h>
 #include <WebServer.h>
 #include <EEPROM.h>
@@ -341,12 +341,24 @@ void Oled_Time() {
 void matrix_time() {
   int n;
   int p;
-  if (CurrentTime.substring(9,10)!= "") {
-    lc.setChar(0,1,' ',false);
+
+  // USA mode
+  if (CurrentTime.substring(9,10)!= "") {   
     p=0;
-  }else {
-    lc.setChar(0,7,' ',false);
+    lc.setChar(0,1,' ',false);
+    if (CurrentTime.substring(9,10)== "A") {
+      lc.setChar(0,0,'A',false);
+    }else {
+      lc.setChar(0,0,'P',false);
+    }
+  // EU mode
+  }else {                                   
     p=1;
+    lc.setChar(0,7,' ',false);
+    lc.setChar(0,0,' ',false);
+    if (CurrentTime.startsWith("0")){
+      lc.setChar(0,6,' ',false);
+    }
   }
 
   n = (CurrentTime.substring(0,1)).toInt();
@@ -355,6 +367,7 @@ void matrix_time() {
   }else {
     lc.setChar(0,7,' ',false);
   }
+  
   n = (CurrentTime.substring(1,2)).toInt();
   lc.setDigit(0,6-p,n,true);
   n = (CurrentTime.substring(3,4)).toInt();
@@ -365,14 +378,6 @@ void matrix_time() {
   lc.setDigit(0,3-p,n,false);
   n = (CurrentTime.substring(7,8)).toInt();
   lc.setDigit(0,2-p,n,false);
-  
-  if (CurrentTime.substring(9,10)== "P") {
-    lc.setChar(0,0,'P',false);
-  }else if (CurrentTime.substring(9,10)== "A"){
-    lc.setChar(0,0,'A',false);
-  }else {
-    lc.setChar(0,0,' ',false);
-  }
 }
 //////////////////////////////////////////////////////////////////////////////
 void scrollText() {
