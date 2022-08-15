@@ -11,14 +11,26 @@
             https://www.arduinolibraries.info/libraries/led-controller
                       Noa Sakurajin (noasakurajin@web.de)
 
+                         --- Audio information ---
+                   >>> Download: Game_Audio Library <<<
+   http://www.buildlog.net/blog/wp-content/uploads/2018/02/Game_Audio.zip
+     https://www.buildlog.net/blog/2018/02/game-audio-for-the-esp32/
+
+                  >>> Download: XT_DAC_Audio Library <<<
+     https://www.xtronical.com/wp-content/uploads/2018/03/XT_DAC_Audio.zip
+ http://www.xtronical.com/basics/audio/digitised-speech-sound-esp32-playing-wavs/
+        https://www.xtronical.com/basics/audio/playing-wavs-updated/
+
                                  --- oOo ---
                                 
                               Modified by: J_RPM
                                http://j-rpm.com/
                         https://www.youtube.com/c/JRPM
-                              January of 2021 
+        (v1.45) Two time zones, voice prompts and Pac-Man animations
+                UTF-8 Spanish characters and Pac-Man animations
+                              >>> April of 2021 <<<
 
-              An optional OLED display is added to show the Time an Date,
+              An optional OLED display is added to Januarshow the Time an Date,
                   adding some new routines and modifying others.
 
                               >>> HARDWARE <<<
@@ -38,12 +50,37 @@
 
  ____________________________________________________________________________________
 */
-String HWversion = "v1.43"; 
+//////////////////////////////////////////////////////////
+// Two time zones, voice prompts and Pac-Man animations //
+//////////////////////////////////////////////////////////
+String HWversion = "v1.45"; 
 #include <WiFi.h>
 #include <WebServer.h>
 #include <EEPROM.h>
 #include <time.h>
 #include "LedController.hpp"
+#include "Game_Audio.h";
+#include "SoundData.h";
+
+Game_Audio_Class GameAudio(26,0); 
+Game_Audio_Wav_Class waw0(w0); 
+Game_Audio_Wav_Class waw1(w1); 
+Game_Audio_Wav_Class waw2(w2); 
+Game_Audio_Wav_Class waw3(w3); 
+Game_Audio_Wav_Class waw4(w4); 
+Game_Audio_Wav_Class waw5(w5); 
+Game_Audio_Wav_Class waw6(w6); 
+Game_Audio_Wav_Class waw7(w7); 
+Game_Audio_Wav_Class waw8(w8); 
+Game_Audio_Wav_Class waw9(w9); 
+Game_Audio_Wav_Class wawMin(Minutos); 
+Game_Audio_Wav_Class wawHor(Horas); 
+Game_Audio_Wav_Class wawSon(sonLas); 
+Game_Audio_Wav_Class wawTone(Tone); 
+Game_Audio_Wav_Class pmEat(Eating); 
+Game_Audio_Wav_Class pmDeath(pacmanDeath);
+Game_Audio_Wav_Class wawIP(wIP);
+Game_Audio_Wav_Class wawPunto(wPunto);
 
 #include <DNSServer.h>
 #include <WiFiManager.h>  //https://github.com/tzapu/WiFiManager
@@ -56,6 +93,18 @@ Adafruit_SSD1306 display(OLED_RESET);
 String CurrentTime, CurrentDate, nDay, webpage = "";
 bool display_EU = true;
 int matrix_speed = 25;
+
+String zone1= "SPAIN";
+String zone2= "JAPAN";
+bool T_Zone2 = false;
+bool pac = false;
+bool on_txt = false;
+bool alTXT = false;
+
+// Hourly announcements from 10 a.m. to 11 p.m.
+int alarm_H = 10;
+bool sound_chime = false;
+int h,m,s;
 
 // Turn on debug statements to the serial output
 #define DEBUG  1
@@ -75,10 +124,9 @@ int matrix_speed = 25;
 #define CS_PIN  25 
 
 // Define the number of bytes you want to access (first is index 0)
-#define EEPROM_SIZE 7
+#define EEPROM_SIZE 14
 
 ////////////////////////// MATRIX //////////////////////////////////////////////
-//#define MAX_DIGITS 20
 bool _scroll = false;
 bool display_date = true;
 bool animated_time = true;
@@ -114,9 +162,10 @@ LedController<1,1> lc;
 //////////////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////////
 void setup() {
-  
   Serial.begin(115200);
   timeConnect = millis();
+
+  readConfig();
 
   lc=LedController<1,1>(DIN_PIN,CLK_PIN,CS_PIN);
 
@@ -129,10 +178,7 @@ void setup() {
   lc.setIntensity(brightness);
   /* and clear the display */
   lc.clearMatrix();
- 
-  // Test Display LED
-  testBCD();
- 
+
   display.begin(SSD1306_SWITCHCAPVCC, 0x3C);  // initialize with the I2C addr 0x3C (for the 64x48)
   display.setTextColor(WHITE);
   display.clearDisplay();
@@ -149,10 +195,16 @@ void setup() {
   display.println(F("Sync..."));
   display.display();
 
-  mText="        NTP TIME  " + HWversion + "  " ;
+  mText = "        NTP "; 
+  if (T_Zone2==false) {
+    mText = mText + zone1;    
+  }else{
+    mText = mText + zone2;    
+  }
+  mText = mText + "  " + HWversion + " ";
   scrollText();
-  delay(2000);
-  
+  delay(1000);
+
   //------------------------------
   //WiFiManager intialisation. Once completed there is no need to repeat the process on the current board
   WiFiManager wifiManager;
@@ -183,14 +235,75 @@ void setup() {
     PRINTS("\nTimeOut connection, restarting!!!");
     reset_ESP32();
   }
-  
+
   // Print the IP address
   PRINT("\nUse this URL to connect -> http://",WiFi.localIP());
   PRINTS("/");
+  GameAudio.PlayWav(&wawTone, false, 1.0);
+  while(GameAudio.IsPlaying()){ }    // wait until done
+  delay(100);
+  GameAudio.PlayWav(&wawIP, false, 1.0);
+  while(GameAudio.IsPlaying()){ }    // wait until done
   display_ip();
-  SetupTime();
-  UpdateLocalTime();
+  playIP();
+  display_flash();
   
+  // Syncronize Time and Date
+  SetupTime();
+
+  // Select mode: TIME/MESSAGE
+  checkServer();
+ 
+  // Debug first message 
+  String stringMsg = "ESP32_Time_8BCD_JR " + HWversion + " - RTC: ";
+  if (T_Zone2 == false) {
+    stringMsg = stringMsg + zone1;    
+  }else{
+    stringMsg = stringMsg + zone2;    
+  }
+  stringMsg = stringMsg + " - IP: " + WiFi.localIP().toString() + "\n";
+  PRINT("\nstringMsg >>> ", stringMsg + "\n");
+
+  soundTime();
+  delay(400);
+  soundEnd();
+
+}
+//////////////////////////////////////////////////////////////////////////////
+//////////////////////////////////////////////////////////////////////////////
+void loop() {
+  // Wait for a client to connect and when they do process their requests
+  server.handleClient();
+
+  // Update and refresh of the date and time on the displays
+  if (millis() % 60000) UpdateLocalTime();
+  Oled_Time();
+  on_txt=false;
+  matrix_time();
+
+  // Show date on matrix display
+  if (display_date == true) {
+    if(millis()-clkTime > 30000) { // clock for 30s, then scrolls for about 5s
+      _scroll=true;
+      on_txt=true; // Window of checking Alarm  
+      Oled_Time();
+      if (alTXT==false) {
+        alTXT=true;  
+        mText="        " + mDay; 
+      }else {
+        alTXT=false;  
+        mText="        IP: " + WiFi.localIP().toString();
+      }
+      mText= mText + "        ";
+      scrollText();
+      clkTime = millis();
+      _scroll=false;
+    }
+  }
+}
+//////////////////////////////////////////////////////////////////////////////
+//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+void readConfig(){
   // Initialize EEPROM with predefined size
   EEPROM.begin(EEPROM_SIZE);
 
@@ -205,7 +318,6 @@ void setup() {
   // 2 - Matrix Brightness  
   brightness = EEPROM.read(2);
   PRINT("\nbrightness: ",brightness);
-  //sendCmdAll(CMD_INTENSITY,brightness);
   lc.setIntensity(brightness);
   
   // 3 - Animated Time  
@@ -224,50 +336,62 @@ void setup() {
   }
   PRINT("\nmatrix_speed: ",matrix_speed);
 
+  PRINT("\nalarm_H: ",alarm_H);
+
+  // 9 - sound_chime (ON/OFF)
+  sound_chime = EEPROM.read(9);
+  if (sound_chime > 1) {
+    sound_chime = true;
+    EEPROM.write(9, sound_chime);
+  }
+  PRINT("\nCarrillon: ",sound_chime);
+
+  // 13 - Time Zone
+  T_Zone2 = EEPROM.read(13);
+  PRINT("\nT_Zone2: ",T_Zone2);
+
    // Close EEPROM    
   EEPROM.commit();
   EEPROM.end();
-
-  checkServer();
-
-  // Debug first message 
-  String stringMsg = "ESP32_Time_8BCD_JR " + HWversion + " - IP: " + WiFi.localIP().toString();
-  PRINT("\nstringMsg >>> ", stringMsg + "\n");
-
 }
-//////////////////////////////////////////////////////////////////////////////
-//////////////////////////////////////////////////////////////////////////////
-void loop() {
-  // Wait for a client to connect and when they do process their requests
-  server.handleClient();
-
-  // Update and refresh of the date and time on the displays
-  if (millis() % 60000) UpdateLocalTime();
-  Oled_Time();
-  server.handleClient();
-  matrix_time();
-
-  // Show date on matrix display
-  if (display_date == true) {
-    if(millis()-clkTime > 30000) { // clock for 30s, then scrolls for about 5s
-      _scroll=true;
-      Oled_Time();
-      mText="        " + mDay + "        ";
-      scrollText();
-      clkTime = millis();
-      _scroll=false;
-    }
-  }
-}
-//////////////////////////////////////////////////////////////////////////////
+//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// Choose your time zone from: https://github.com/nayarsystems/posix_tz_db/blob/master/zones.csv 
+// See below for examples
+// Or, choose a time server close to you, but in most cases it's best to use pool.ntp.org to find an NTP server
+// then the NTP system decides e.g. 0.pool.ntp.org, 1.pool.ntp.org as the NTP syem tries to find  the closest available servers
+// EU "0.europe.pool.ntp.org"
+// US "0.north-america.pool.ntp.org"
+// See: https://www.ntppool.org/en/                                                           
+// UK normal time is GMT, so GMT Offset is 0, for US (-5Hrs) is typically -18000, AU is typically (+8hrs) 28800
+// In the UK DST is +1hr or 3600-secs, other countries may use 2hrs 7200 or 30-mins 1800 or 5.5hrs 19800 Ahead of GMT use + offset behind - offset
+//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 boolean SetupTime() {
+  char* Timezone;
+  char* ntpServer;
+  int gmtOffset_sec;
+  int daylightOffset_sec;
+  
+  // Select Time Zone (Spain/Japan)
+  if (T_Zone2 == false) {
+    Timezone= "CET-1CEST-2,M3.5.0/02:00:00,M10.5.0/03:00:00"; 
+    ntpServer= "es.pool.ntp.org";
+    gmtOffset_sec= 0;
+    daylightOffset_sec= 7200;
+  }else{
+    Timezone= "UTC-9";  
+    ntpServer= "ntp.nict.jp"; 
+    gmtOffset_sec= 0;
+    daylightOffset_sec= 0;
+  }
+  
   configTime(gmtOffset_sec, daylightOffset_sec, ntpServer, "time.nist.gov");  // configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
-  setenv("TZ", Timezone, 1);                                                  // setenv()adds the "TZ" variable to the environment with a value TimeZone, only used if set to 1, 0 means no change
+  setenv("TZ", Timezone, 1);                                            // setenv()adds the "TZ" variable to the environment with a value TimeZone, only used if set to 1, 0 means no change
   tzset();                                                                    // Set the TZ environment variable
-  delay(2000);
+  delay(1000);
   bool TimeStatus = UpdateLocalTime();
   return TimeStatus;
 }
+//////////////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////////
 boolean UpdateLocalTime() {
   struct tm timeinfo;
@@ -275,15 +399,35 @@ boolean UpdateLocalTime() {
   time(&now);
 
   //See http://www.cplusplus.com/reference/ctime/strftime/
+  // %w >>> Weekday as a decimal number with Sunday as 0 (0-6)
+  String esWDay[7] = {"DOMINGO","LUNES","MARTES","MIERCOLES","JUEVES","VIERNES","SABADO"};
+  String esMonth[13] = {"ENERO","FEBRERO","MARZO","ABRIL","MAYO","JUNIO","JULIO","AGOSTO","SEPTIEMBRE","OCTUBRE","NOVIEMBRE","DICIEMBRE"};
+  String esDate;
   char output[30];
-  strftime(output, 30, "%A", localtime(&now));
-  nDay = output;
-  mDay = nDay;
-  nDay = (nDay.substring(0,3)) + ". ";
+  
+  if (T_Zone2 == false && display_EU == true) {
+    strftime(output, 30, "%w", localtime(&now));
+    mDay = esWDay[atoi(output)];
+  }else {
+    strftime(output, 30, "%A", localtime(&now));
+    mDay = output;
+  }
+  strftime(output, 30, "%a. ", localtime(&now));
+  nDay = output; 
+  
   if (display_EU == true) {
     strftime(output, 30,"%d-%m", localtime(&now));
     CurrentDate = nDay + output;
-    strftime(output, 30,", %d %B %Y", localtime(&now));
+    //%m  Month as a decimal number (01-12)
+    if (T_Zone2 == false) {
+      strftime(output, 30,", %d", localtime(&now));
+      esDate = mDay + output;
+      strftime(output, 30,"%m", localtime(&now));
+      mDay = esDate + " " + esMonth[atoi(output)-1];
+      strftime(output, 30," %Y", localtime(&now));
+    }else {
+      strftime(output, 30,", %d %B %Y", localtime(&now));
+    }
     mDay = mDay + output;
     strftime(output, 30, "%H:%M:%S", localtime(&now));
     CurrentTime = output;
@@ -298,6 +442,7 @@ boolean UpdateLocalTime() {
   }
   return true;
 }
+/////////////////////////////////////////////////////
 /////////////////////////////////////////////////////
 //------------------ OLED DISPLAY -----------------//
 /////////////////////////////////////////////////////
@@ -334,6 +479,12 @@ void Oled_Time() {
     display.print(CurrentTime.substring(8,11));
   }
   display.display();
+
+  // Load Time and check Alarms
+  h = (CurrentTime.substring(0,2)).toInt();
+  m = (CurrentTime.substring(3,5)).toInt();
+  s = (CurrentTime.substring(6,8)).toInt();
+  checkAlarm();
 }
 /////////////////////////////////////////////////////
 //------------------ MATRIX DISPLAY ---------------//
@@ -400,6 +551,7 @@ void scrollText() {
     lc.setChar(0,1,char_array[i+6],false);
     lc.setChar(0,0,char_array[i+7],false);
     delay(matrix_speed*10);
+    server.handleClient();
   }
 }
 //////////////////////////////////////////////////////////////////////////////
@@ -461,14 +613,20 @@ void button_Home() {
 //////////////////////////////////////////////////////////////////////////////
 void NTP_Clock_home_page() {
   append_webpage_header();
-  webpage += "<p><h3 class=\"animate__animated animate__fadeInLeft\">Display Mode is ";
+  webpage += "<p><h3 class=\"animate__animated animate__fadeInLeft\">RTC: ";
+  if (T_Zone2 == false) webpage += zone1; else webpage += zone2;
+  webpage += " - ";
   if (display_EU == true) webpage += "EU"; else webpage += "USA";
-  webpage += "</p>[";
+  webpage += " mode</p>[";
   webpage += "(hh:mm:ss) ";
   if (display_date == true) webpage += "& Date"; else webpage += " Only Time";
   webpage += " - B:";     
   webpage += brightness;
-  webpage += "]</h3></div>";
+  webpage += "]";
+  webpage += "<p>Carrillon starting at ";
+  webpage += String(alarm_H);
+  if (sound_chime == false) webpage += " (OFF)"; else webpage += " (ON)";
+  webpage += "</p></h3></div>";
 
   webpage += "<div id=\"section\">";
   button_Home();
@@ -476,16 +634,27 @@ void NTP_Clock_home_page() {
   webpage += "<a href=\"\\DISPLAY_MODE_EU\"><type=\"button\" class=\"button\">EU mode</button></a></p>";
 
   webpage += "<p><a href=\"\\DISPLAY_DATE\"><type=\"button\" class=\"button\">Show Date</button></a>";
-  webpage += "<a href=\"\\DISPLAY_NO_DATE\"><type=\"button\" class=\"button\">Only Time</button></a></p><br>";
+  webpage += "<a href=\"\\DISPLAY_NO_DATE\"><type=\"button\" class=\"button\">Only Time</button></a></p>";
+
+  webpage += "<p><a href=\"\\CARRILLON\"><type=\"button\" class=\"button\">Chime: ";
+  if (sound_chime==true) webpage += "OFF"; else webpage += "ON"; 
+  webpage += "</button></a>";
+  webpage += "<a href=\"\\sPAC\"><type=\"button\" class=\"button\">Pac-Man</button></a>";
+  webpage += "<a href=\"\\SOUND\"><type=\"button\" class=\"button\">Sound TIME</button></a></p><br>";
  
   webpage += "<form id=\"bright_form\">";
   webpage += "<a>Brightness<br>MIN(0)<input type=\"range\" name=\"Bright\" min=\"0\" max=\"15\" value=\"";
   webpage += brightness;
   webpage += "\">(15)MAX</a></form>";
   webpage += "<p><a href=\"\"><type=\"button\" onClick=\"SendBright()\" class=\"button\">Send Brightness</button></a></p>";
-
   webpage += "<br><hr class=\"line\"><br>";
-  webpage += "<p><a href=\"\\RESTART\"><type=\"button\" class=\"button\">Restart ESP32</button></a></p>";
+
+  webpage += "<p><a href=\"\\RESTART_1\"><type=\"button\" class=\"button\">RTC: ";
+  webpage += zone1;
+  webpage += "</button></a>";
+  webpage += "<a href=\"\\RESTART_2\"><type=\"button\" class=\"button\">RTC: ";
+  webpage += zone2;
+  webpage += "</button></a></p>";
   webpage += "<br><p><a href=\"\\RESET_WIFI\"><type=\"button\" class=\"button button2\">Reset WiFi</button></a></p>";
   webpage += "</div>";
   end_webpage();
@@ -563,6 +732,18 @@ void display_matrix_speed() {
   end_Eprom();
 }
 //////////////////////////////////////////////////////////////
+void save_Chime() {
+  EEPROM.begin(EEPROM_SIZE);
+  EEPROM.write(9, sound_chime);
+  end_Eprom();
+}
+//////////////////////////////////////////////////////////////
+void set_Zone2() {
+  EEPROM.begin(EEPROM_SIZE);
+  EEPROM.write(13, T_Zone2);
+  end_Eprom();
+}
+//////////////////////////////////////////////////////////////
 void end_Eprom() {
   EEPROM.commit();
   EEPROM.end();
@@ -592,13 +773,16 @@ void display_AP_wifi () {
 //////////////////////////////////////////////////////////////
 void display_flash() {
   for (int i=0; i<8; i++) {
+    lc.setIntensity(0);
     display.invertDisplay(true);
     display.display();
-    delay (150);
+    delay(80);
+    lc.setIntensity(15);
     display.invertDisplay(false);
     display.display();
-    delay (150);
+    delay(80);
   }
+  lc.setIntensity(brightness);
 }
 //////////////////////////////////////////////////////////////
 void display_ip() {
@@ -617,7 +801,6 @@ void display_ip() {
   display.print(WiFi.localIP());
   display.println("/");
   display.display();
-  display_flash();
 }
 //////////////////////////////////////////////////////////////////////////////
 /////////////////////////////////////////////////////////////////
@@ -763,6 +946,20 @@ void _save_bright(){
   responseWeb();
 }
 /////////////////////////////////////////////////////////////////
+void _restart_1() {
+  T_Zone2=false;
+  PRINT("\n>>> SYNC Time: ",zone1);
+  set_Zone2();
+  _restart();
+}
+/////////////////////////////////////////////////////////////////
+void _restart_2() {
+  T_Zone2=true;
+  PRINT("\n>>> SYNC Time: ",zone2);
+  set_Zone2();
+  _restart();
+}
+/////////////////////////////////////////////////////////////////
 void _restart() {
   PRINTS("\n-> RESTART");
   web_reset_ESP32();
@@ -776,6 +973,27 @@ void _reset_wifi() {
 void _home() {
   PRINTS("\n-> HOME");
   responseWeb();
+}
+/////////////////////////////////////////////////////////////////
+void _carrillon() {
+  sound_chime = !sound_chime;
+  PRINT("\n-> Carrillon = ", sound_chime);
+  responseWeb();
+  save_Chime();
+}
+/////////////////////////////////////////////////////////////////
+void _pacman() {
+  if (pac==false) responseWeb();
+  _scroll=true;
+  soundEnd();
+  delay(400);
+}
+/////////////////////////////////////////////////////////////////
+void _sound() {
+  responseWeb();
+  soundTime();
+  delay(400);
+  soundEnd();
 }
 /////////////////////////////////////////////////////////////////
 void responseWeb(){
@@ -810,18 +1028,147 @@ void checkServer(){
   server.on("/BRIGHT=14", _bright_14); 
   server.on("/BRIGHT=15", _bright_15); 
   server.on("/HOME", _home);
-  server.on("/RESTART", _restart);  
+  server.on("/CARRILLON", _carrillon);
+  server.on("/sPAC", _pacman);
+  server.on("/SOUND", _sound);
+  server.on("/RESTART_1", _restart_1);  
+  server.on("/RESTART_2", _restart_2);  
   server.on("/RESET_WIFI", _reset_wifi);
 }
 /////////////////////////////////////////////////////////////////
 /////////////////////////////////////////////////////////////////
 /////////////////////////////////////////////////////////////////
 void testBCD() {
-  for(int i=0;i<8;i++) {
-    lc.setDigit(0,i,8,true);
+  for(int n=0;n<8;n++) {
+    for(int i=0;i<8;i++) {
+      lc.setDigit(0,i,8,true);
+    }
+    delay(80);
+    lc.clearMatrix();
+    delay(80);
   }
-  delay(1000);
-  lc.clearMatrix();
+}
+/////////////////////////////////////////////////////////////////
+void checkAlarm(){
+  int myH;
+  //Convert to EU time for alarm
+  String modT = CurrentTime.substring(9,10);
+  if (modT == "P" && h!=12) {
+    myH=h+12;
+  }else if (modT == "A" && h==12) {
+    myH=0;
+  }else {
+    myH=h;
+  }
+  //PRINT("\nTime: ", CurrentTime + " -> EU:" + myH + " s:" + String(s) + " - " + on_txt);
+ 
+  // Hourly announcements from 'alarm_H' to 11 p.m. 
+  if (sound_chime == true && myH >= alarm_H && m == 0) {
+    // on_txt: window of checking Alarm
+    if ((on_txt==true && s < 30)||(s == 0)){
+      soundAlarm(myH);
+    }
+  }
+}
+/////////////////////////////////////////////////////////////////
+/////////////////////////////////////////////////////////////////
+void soundAlarm(int n){
+  _scroll=true;
+  on_txt=false; 
+  PRINT("\nAlarm: ", String(n) + ":00" );
+  lc.setIntensity(15);
+  GameAudio.PlayWav(&wawTone, false, 1.0); 
+  while(GameAudio.IsPlaying()){ } // wait until done
+  lc.setIntensity(0);
+  delay(400);
+  lc.setIntensity(15);
+  soundTime();
+  lc.setIntensity(0);
+  delay(600);
+
+  soundEnd();
+}/////////////////////////////////////////////////////////////////
+void soundEnd(){
+  pacmanEffect();
+  GameAudio.PlayWav(&pmDeath, false, 1.0);
+  testBCD();
+  UpdateLocalTime();
+  clkTime = millis();
+  _scroll=false;
+  lc.setIntensity(brightness);
+}
+/////////////////////////////////////////////////////////////////
+void pacmanEffect(){
+  bool p=false;
+  lc.setIntensity(15);
+  for (int i=8; i>=0; i--) {
+   GameAudio.PlayWav(&pmEat, false, 1.0);
+   lc.setChar(0,i+1,' ',false);
+   if (p==true){
+      p=false;
+      lc.setChar(0,i,'G',false);
+    }else {
+      p=true;
+      lc.setChar(0,i,'C',false);
+    }
+    while(GameAudio.IsPlaying()){ }
+  }
+}
+/////////////////////////////////////////////////////////////////
+void soundTime(){
+  _scroll=true;
+  lc.setIntensity(15);
+  UpdateLocalTime();
+  Oled_Time();
+  matrix_time();
+  PRINT("\n>>> SOUND Time: ", CurrentTime);
+  PRINTS("\n");
+  GameAudio.PlayWav(&wawSon, false, 1.0);
+  while(GameAudio.IsPlaying()){ }    // wait until done
+  playWawT(CurrentTime.substring(0,2).toInt());
+  GameAudio.PlayWav(&wawHor, false, 1.0);
+  while(GameAudio.IsPlaying()){ }    // wait until done
+  delay(200);
+  playWawT(CurrentTime.substring(3,5).toInt());
+  GameAudio.PlayWav(&wawMin, false, 1.0);
+  while(GameAudio.IsPlaying()){ }    // wait until done
+}
+/////////////////////////////////////////////////////////////////
+void playWawT(int w){
+  int wH = w/10;
+  if (wH > 0) playWawN(wH);
+  playWawN(w%10);
+}
+/////////////////////////////////////////////////////////////////
+void playWawN(int n){
+  switch(n) {
+    case 0: GameAudio.PlayWav(&waw0, false, 1.0); break;  
+    case 1: GameAudio.PlayWav(&waw1, false, 1.0); break;
+    case 2: GameAudio.PlayWav(&waw2, false, 1.0); break;  
+    case 3: GameAudio.PlayWav(&waw3, false, 1.0); break;  
+    case 4: GameAudio.PlayWav(&waw4, false, 1.0); break;  
+    case 5: GameAudio.PlayWav(&waw5, false, 1.0); break;  
+    case 6: GameAudio.PlayWav(&waw6, false, 1.0); break;  
+    case 7: GameAudio.PlayWav(&waw7, false, 1.0); break;  
+    case 8: GameAudio.PlayWav(&waw8, false, 1.0); break;  
+    case 9: GameAudio.PlayWav(&waw9, false, 1.0); break;
+  }
+  while(GameAudio.IsPlaying()){ }    // wait until done
+}
+/////////////////////////////////////////////////////////////////
+void playIP(){
+  String dg;
+  String mIP = WiFi.localIP().toString();
+  unsigned int carIP = mIP.length();
+  for (int i=0; i<=(carIP-1); i++) {
+    dg = mIP.substring(i,i+1);
+    if (dg==".") {
+      GameAudio.PlayWav(&wawPunto, false, 1.0);
+    }else {
+      playWawN(dg.toInt());
+    }
+    while(GameAudio.IsPlaying()){ }    // wait until done
+  }
 }
 ////////////////////////// END //////////////////////////////////
 /////////////////////////////////////////////////////////////////
